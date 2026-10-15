@@ -1,0 +1,121 @@
+# watchparty -- nginx location block.
+#
+# Include this inside the server {} block that serves your site over TLS:
+#     include /etc/nginx/conf.d/watchparty.locations.conf;
+#
+# Requires two things in the surrounding http {} context:
+#
+#   resolver 127.0.0.11 valid=30s ipv6=off;        # docker's embedded DNS, so
+#                                                  # nginx starts even when the
+#                                                  # upstreams are down
+#   map $http_upgrade $connection_upgrade {        # for the chat websocket
+#       default upgrade;
+#       ''      close;
+#   }
+#
+# $watchparty_client_ip must also be defined. MediaMTX pins each HLS session to
+# the client IP it reads from X-Forwarded-For, so that header must carry ONE
+# stable address. An appended proxy chain breaks HLS playback when a CDN in
+# front of you rotates edge IPs between requests. If you sit behind Cloudflare:
+#
+#   map $http_cf_connecting_ip $watchparty_client_ip {
+#       ''      $remote_addr;
+#       default $http_cf_connecting_ip;
+#   }
+#
+# If you have no CDN, this is enough:
+#
+#   map "" $watchparty_client_ip { default $remote_addr; }
+#
+# Only the page, the WebRTC signalling handshake and the HLS fallback pass
+# through nginx. WebRTC media is UDP straight to the host on 8189.
+
+location = /watchparty {
+        return 301 /watchparty/;
+}
+
+# WHIP = publish (OBS), WHEP = play (browser). SDP handshake only.
+location /watchparty/whip {
+        set $upstream http://mediamtx:8889;
+        rewrite ^/watchparty/whip(.*)$ /live/whip$1 break;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $watchparty_client_ip;
+        proxy_set_header X-Forwarded-For $watchparty_client_ip;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_redirect /live/whip/ /watchparty/whip/;
+}
+location /watchparty/whep {
+        set $upstream http://mediamtx:8889;
+        rewrite ^/watchparty/whep(.*)$ /live/whep$1 break;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $watchparty_client_ip;
+        proxy_set_header X-Forwarded-For $watchparty_client_ip;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_redirect /live/whep/ /watchparty/whep/;
+}
+
+# Low-latency HLS fallback. LL-HLS holds playlist requests open until the next
+# part is ready, so buffering must be off and reads must not time out early.
+location /watchparty/hls/ {
+        set $upstream http://mediamtx:8888;
+        rewrite ^/watchparty/hls/(.*)$ /live/$1 break;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $watchparty_client_ip;
+        proxy_set_header X-Forwarded-For $watchparty_client_ip;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 60s;
+        # MediaMTX answers the first playlist request with a 302 to
+        # /live/index.m3u8?cookieCheck=1. Without this the browser would follow it
+        # out of the /watchparty/hls/ prefix to a URL that does not exist here.
+        # (The cookie itself needs no rewriting: it is set without a Path, so the
+        # browser scopes it to the directory it actually requested.)
+        # Force https on the rewritten Location. Cloudflare reaches this origin
+        # over plain HTTP, so $scheme here is "http"; emitting that would downgrade
+        # the browser mid-redirect and, because MediaMTX's session cookie is
+        # Secure, the cookie would then be withheld and the next request 401s.
+        proxy_redirect /live/ https://$host/watchparty/hls/;
+}
+
+# Chat websocket. Long-lived connections, so the read timeout has to be
+# generous; the app also pings every 30s to stop intermediaries idling it out.
+# $connection_upgrade is the map defined in default.conf.
+location /watchparty/ws {
+        set $upstream http://watchparty:8000;
+        rewrite ^/watchparty/(.*)$ /$1 break;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $watchparty_client_ip;
+        proxy_set_header X-Forwarded-For $watchparty_client_ip;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+}
+
+# Player page and status API.
+location /watchparty/ {
+        set $upstream http://watchparty:8000;
+        rewrite ^/watchparty/?(.*)$ /$1 break;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $watchparty_client_ip;
+        proxy_set_header X-Forwarded-For $watchparty_client_ip;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_redirect off;
+        proxy_buffering off;
+}

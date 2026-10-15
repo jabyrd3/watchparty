@@ -1,0 +1,96 @@
+# MediaMTX config for watchparty.  (example -- edit before use)
+#
+# Two values MUST be changed:
+#   * webrtcAdditionalHosts -> the public IP or hostname viewers can reach
+#   * authInternalUsers[0].pass -> your publishing password
+#
+# Replaces the nginx-rtmp ingest container. One origin, several egresses off the
+# same stream:
+#
+#   OBS --WHIP(H264+Opus)--> mediamtx --WHEP--> browser   (~0.2-0.5s)
+#                                     \--HLS--> browser   (~1.5-3s, fallback)
+#
+# Only WebRTC *media* bypasses nginx (UDP 8189, published directly). All
+# signalling and HLS is proxied through the existing nginx TLS vhost.
+
+logLevel: info
+
+# Used by the watchparty app to report live/offline to the player page.
+api: yes
+apiAddress: :9997
+
+# Ingest protocols we don't use.
+rtsp: no
+srt: no
+
+# RTMP ingest is disabled. Publishing is over WHIP, so nothing used it, and the
+# exposed port only attracted scanners (374 bogus handshakes in one day).
+# To re-enable: set this to yes and re-add the 1935 port mapping in
+# docker-compose.yml. Note AAC over RTMP is HLS-only -- browsers cannot play AAC
+# over WebRTC.
+rtmp: no
+
+###############################################
+# HLS - the fallback path
+
+hls: yes
+hlsAddress: :8888
+hlsAllowOrigins: ["*"]
+# nginx fronts this; take client IPs from X-Forwarded-For.
+hlsTrustedProxies: [172.19.0.0/16, 172.20.0.0/16]
+# Keep HLS generated at all times so failover doesn't wait for a first request.
+hlsAlwaysRemux: yes
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+
+###############################################
+# WebRTC - the primary path
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcAllowOrigins: ["*"]
+webrtcTrustedProxies: [172.19.0.0/16, 172.20.0.0/16]
+
+# Single UDP mux port for media -- no port range needed. This is the one thing
+# that cannot be proxied through nginx and must be published on the host.
+webrtcLocalUDPAddress: :8189
+# ICE-TCP on the same port number, for viewers whose network blocks UDP.
+webrtcLocalTCPAddress: :8189
+
+# The container only sees its docker bridge address, which is useless as an ICE
+# candidate to outside clients. Advertise the host's public IP instead. No TURN
+# is needed because the server itself is publicly routable.
+webrtcIPsFromInterfaces: no
+webrtcIPsFromInterfacesList: []
+webrtcAdditionalHosts: [YOUR.PUBLIC.IP.HERE]
+
+###############################################
+# Auth
+
+authMethod: internal
+authInternalUsers:
+  # Publisher. In OBS: Service=WHIP, Bearer Token = "obs:<pass>".
+  - user: obs
+    pass: CHANGE-ME-TO-A-LONG-RANDOM-STRING
+    permissions:
+      - action: publish
+        path: live
+
+  # Viewers: anonymous read of the one path, nothing else.
+  - user: any
+    pass:
+    permissions:
+      - action: read
+        path: live
+
+  # The watchparty app polls the API for live status, from the docker networks.
+  - user: any
+    pass:
+    ips: [172.19.0.0/16, 172.20.0.0/16, 127.0.0.1, ::1]
+    permissions:
+      - action: api
+
+paths:
+  live:

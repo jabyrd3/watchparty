@@ -1,0 +1,68 @@
+# watchparty -- example deployment.
+#
+# Copy to docker-compose.yml, work through the CHANGE ME items, then:
+#   cp mediamtx.example.yml mediamtx.yml     # and edit it
+#   docker compose up -d
+#
+# You also need a TLS reverse proxy in front of this. It is not optional:
+# browsers only expose WebRTC in a secure context, so the page must be served
+# over HTTPS. See nginx/watchparty.locations.conf.example.
+
+services:
+  watchparty:
+    # Pinned deliberately: the app uses node:sqlite, which needs Node >= 22.5.
+    image: node:24-slim
+    container_name: watchparty
+    command: ["node", "/app/server.js"]
+    environment:
+      - PORT=8000
+      # Path this app is mounted under by your reverse proxy. Use / if you are
+      # serving it at the root of a hostname.
+      - BASE_PATH=/watchparty/
+      - MEDIAMTX_API=http://mediamtx:9997
+      - STREAM_PATH=live
+      - DATA_DIR=/data
+      # In-memory chat scrollback shown to people joining mid-conversation.
+      # Set to 0 to retain nothing at all. Messages are never written to disk.
+      - CHAT_HISTORY=50
+      # How often the server logs an occupancy line.
+      - STATS_INTERVAL_MS=5000
+    volumes:
+      - ./:/app:ro
+      # Holds users.db (usernames + password hashes only) and session.key.
+      # Deleting session.key signs everyone out.
+      - watchparty_data:/data
+    networks: [watchparty]
+    restart: unless-stopped
+    # The occupancy log is ~17k lines/day; cap it so it cannot fill a disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: mediamtx
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      # WebRTC media. This is the one port that CANNOT go through your reverse
+      # proxy -- the browser talks to it directly. UDP is the normal path; TCP
+      # covers viewers whose network blocks UDP.
+      #
+      # Whatever address viewers reach this on must match webrtcAdditionalHosts
+      # in mediamtx.yml, or WebRTC will never connect.
+      - 8189:8189/udp
+      - 8189:8189/tcp
+      # RTMP ingest is disabled in the example config. If you enable it
+      # (rtmp: yes), publish 1935 here too -- and expect port scanners.
+      # - 1935:1935
+    networks: [watchparty]
+    restart: unless-stopped
+
+networks:
+  watchparty:
+
+volumes:
+  watchparty_data:

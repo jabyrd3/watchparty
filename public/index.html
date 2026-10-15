@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="__BASE_PATH__">
+<title>watchparty</title>
+<style>
+  :root { color-scheme: dark; --bg:#0d0f13; --panel:#12151c; --line:#232734; --dim:#9aa1b1; --faint:#6f778a; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: #e7e9ee;
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  header { width: 100%; max-width: 1400px; padding: 18px 20px 12px; display: flex; align-items: center; gap: 10px; }
+  h1 { font-size: 16px; font-weight: 600; letter-spacing: .02em; margin: 0; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #4b5162; flex: none; }
+  .dot.live { background: #ff4d4f; box-shadow: 0 0 0 0 rgba(255,77,79,.7); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 9px rgba(255,77,79,0); } 100% { box-shadow: 0 0 0 0 rgba(255,77,79,0); } }
+  #state { font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #viewers { font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #viewers::before { content: "\00b7"; margin: 0 8px; color: #4b5162; }
+  #mode { margin-left: auto; font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+          padding: 3px 8px; border-radius: 5px; border: 1px solid var(--line); color: var(--dim); }
+  #mode.rtc { border-color: #2f6b4f; color: #7fd6a6; }
+  #mode.hls { border-color: #6b5a2f; color: #d6c07f; }
+
+  /* Stacked by default; chat moves alongside the video at >=912px. */
+  main { width: 100%; max-width: 1400px; padding: 0 20px 28px;
+         display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (min-width: 912px) { main { grid-template-columns: minmax(0, 1fr) 340px; } }
+
+  .frame { position: relative; background: #000; border-radius: 10px; overflow: hidden;
+           aspect-ratio: 16 / 9; border: 1px solid var(--line); }
+  video { width: 100%; height: 100%; display: block; background: #000; }
+  #overlay { position: absolute; inset: 0; display: grid; place-content: center; gap: 10px;
+             text-align: center; background: var(--bg); transition: opacity .3s; padding: 20px; }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay h2 { margin: 0; font-size: 17px; font-weight: 600; }
+  #overlay p { margin: 0; color: var(--dim); font-size: 13px; max-width: 46ch; }
+  .spinner { width: 22px; height: 22px; margin: 0 auto 4px; border-radius: 50%;
+             border: 2px solid #2c3140; border-top-color: #7c88a8; animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .bar { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+
+  button { background: #1b1f29; color: #e7e9ee; border: 1px solid #2c3140; border-radius: 7px;
+           padding: 7px 13px; font: inherit; font-size: 13px; cursor: pointer; }
+  button:hover:not(:disabled) { background: #232838; }
+  button:disabled { opacity: .45; cursor: default; }
+  #playbtn { margin: 6px auto 0; padding: 10px 20px; font-size: 14px; font-weight: 600;
+             background: #2b6cf6; border-color: #2b6cf6; color: #fff; border-radius: 8px; }
+  #playbtn:hover { background: #3a78ff; }
+  .hint { color: var(--faint); font-size: 12px; margin-left: auto; font-variant-numeric: tabular-nums; }
+
+  /* ---- chat ---- */
+  .chat { display: flex; flex-direction: column; background: var(--panel);
+          border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+          height: 420px; }
+  @media (min-width: 912px) { .chat { height: calc((100vw - 380px) * 0.5625 + 47px); max-height: 78vh; min-height: 360px; } }
+  .chat-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+               border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600; }
+  .chat-head .who { margin-left: auto; font-weight: 400; color: var(--faint); font-size: 12px; }
+  .chat-head button { padding: 2px 7px; font-size: 11px; }
+  .chat-log { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px;
+              display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+  .chat-log .m { word-wrap: break-word; overflow-wrap: anywhere; }
+  .chat-log .m .who { font-weight: 600; margin-right: 6px; }
+  .chat-log .sys { color: var(--faint); font-size: 12px; font-style: italic; }
+  .chat-log .empty { color: var(--faint); font-size: 12.5px; margin: auto; text-align: center; }
+  .chat-foot { border-top: 1px solid var(--line); padding: 10px 12px; }
+  .chat-form { display: flex; gap: 6px; }
+  .chat-form input { flex: 1; min-width: 0; }
+  input[type=text], input[type=password] {
+    background: #0e1116; border: 1px solid #2c3140; color: #e7e9ee; border-radius: 7px;
+    padding: 7px 9px; font: inherit; font-size: 13px; width: 100%;
+  }
+  input:focus { outline: none; border-color: #3d4657; }
+  .chat-auth p { margin: 0 0 8px; font-size: 12.5px; color: var(--dim); }
+  .chat-auth .row { display: flex; gap: 6px; margin-top: 8px; }
+  .chat-auth .row button { flex: 1; }
+  .chat-auth input + input { margin-top: 6px; }
+  .err { color: #ff8f8f; font-size: 12px; margin-top: 8px; }
+  .err:empty { display: none; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="dot"></span>
+    <h1>watchparty</h1>
+    <span id="state">connecting&hellip;</span>
+    <span id="viewers" hidden></span>
+    <span id="mode" hidden></span>
+  </header>
+
+  <main>
+    <section>
+      <div class="frame">
+        <video id="video" controls playsinline></video>
+        <div id="overlay">
+          <div class="spinner" id="spin"></div>
+          <h2 id="ovl-title">Waiting for the stream</h2>
+          <p id="ovl-msg">Nothing is being broadcast yet. This page will start playing on its own the moment the stream goes live.</p>
+          <button id="playbtn" hidden>&#9654;&nbsp; Play</button>
+        </div>
+      </div>
+      <div class="bar">
+        <button id="sync" disabled>Jump to live</button>
+        <button id="unmute" hidden>&#128264;&nbsp; Unmute</button>
+        <span class="hint" id="hint"></span>
+      </div>
+    </section>
+
+    <aside class="chat">
+      <div class="chat-head">
+        <span>Chat</span>
+        <span class="who" id="chat-who"></span>
+        <button id="signout" hidden>Sign out</button>
+      </div>
+      <div class="chat-log" id="chat-log"></div>
+      <div class="chat-foot">
+        <div class="chat-auth" id="chat-auth">
+          <p>Sign in to join the conversation.</p>
+          <input type="text" id="cu" placeholder="username" autocomplete="username" maxlength="24">
+          <input type="password" id="cp" placeholder="password" autocomplete="current-password" maxlength="200">
+          <div class="row">
+            <button id="btn-login">Sign in</button>
+            <button id="btn-register">Create account</button>
+          </div>
+          <div class="err" id="auth-err"></div>
+        </div>
+        <form class="chat-form" id="chat-form" hidden>
+          <input type="text" id="chat-input" placeholder="Message" maxlength="500" autocomplete="off">
+          <button type="submit">Send</button>
+        </form>
+      </div>
+    </aside>
+  </main>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+<script>
+(function () {
+  var video   = document.getElementById('video');
+  var overlay = document.getElementById('overlay');
+  var dot     = document.getElementById('dot');
+  var state   = document.getElementById('state');
+  var modeEl  = document.getElementById('mode');
+  var viewersEl = document.getElementById('viewers');
+  var title   = document.getElementById('ovl-title');
+  var msg     = document.getElementById('ovl-msg');
+  var spin    = document.getElementById('spin');
+  var syncBtn = document.getElementById('sync');
+  var playBtn = document.getElementById('playbtn');
+  var unmuteBtn = document.getElementById('unmute');
+
+  var SID = (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : 'x' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+  var POLL_MS = 4000, RTC_TIMEOUT = 8000;
+  var HLS_URL = 'hls/index.m3u8', WHEP_URL = 'whep';
+  var mode = null, pc = null, hls = null, attaching = false, rtcBroken = false;
+
+  /* ================= player ================= */
+
+  function setOverlay(show, t, m, spinning, showPlay) {
+    overlay.classList.toggle('hidden', !show);
+    if (t) title.textContent = t;
+    if (m) msg.textContent = m;
+    spin.style.display = spinning ? '' : 'none';
+    playBtn.hidden = !showPlay;
+  }
+
+  function isPlaying() { return !video.paused && !video.ended && video.readyState > 2; }
+
+  function renderViewers(n, live) {
+    if (typeof n !== 'number') { viewersEl.hidden = true; return; }
+    viewersEl.hidden = false;
+    viewersEl.textContent = n + ' ' + (live ? 'watching' : 'here');
+  }
+
+  function setMode(m) {
+    mode = m;
+    modeEl.hidden = !m;
+    modeEl.className = m === 'webrtc' ? 'rtc' : (m === 'hls' ? 'hls' : '');
+    modeEl.textContent = m || '';
+    syncBtn.hidden = (m === 'webrtc');
+  }
+
+  function startPlayback() {
+    video.muted = false;
+    video.play().then(function () { unmuteBtn.hidden = true; }).catch(function () {
+      video.muted = true;
+      video.play().then(function () { unmuteBtn.hidden = false; setOverlay(false); })
+        .catch(function () {
+          setOverlay(true, 'Ready to play', 'Your browser blocked playback from starting on its own.', false, true);
+        });
+    });
+  }
+
+  function waitIceGathering(peer, capMs) {
+    return new Promise(function (resolve) {
+      if (peer.iceGatheringState === 'complete') return resolve();
+      var done = false;
+      function finish() { if (!done) { done = true; resolve(); } }
+      peer.addEventListener('icegatheringstatechange', function () {
+        if (peer.iceGatheringState === 'complete') finish();
+      });
+      setTimeout(finish, capMs);
+    });
+  }
+
+  function waitConnected(peer, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { reject(new Error('timed out')); }, timeoutMs);
+      function check() {
+        if (peer.connectionState === 'connected') { clearTimeout(t); resolve(); }
+        else if (peer.connectionState === 'failed' || peer.connectionState === 'closed') {
+          clearTimeout(t); reject(new Error(peer.connectionState));
+        }
+      }
+      peer.addEventListener('connectionstatechange', check);
+      check();
+    });
+  }
+
+  function startWhep() {
+    var peer = new RTCPeerConnection({ iceServers: [] });
+    var stream = new MediaStream();
+    peer.addTransceiver('video', { direction: 'recvonly' });
+    peer.addTransceiver('audio', { direction: 'recvonly' });
+    peer.addEventListener('track', function (e) { stream.addTrack(e.track); video.srcObject = stream; });
+    return peer.createOffer()
+      .then(function (o) { return peer.setLocalDescription(o); })
+      .then(function () { return waitIceGathering(peer, 2000); })
+      .then(function () {
+        return fetch(WHEP_URL, { method: 'POST', headers: { 'Content-Type': 'application/sdp' },
+                                 body: peer.localDescription.sdp });
+      })
+      .then(function (res) { if (!res.ok) throw new Error('WHEP HTTP ' + res.status); return res.text(); })
+      .then(function (sdp) { return peer.setRemoteDescription({ type: 'answer', sdp: sdp }); })
+      .then(function () { return waitConnected(peer, RTC_TIMEOUT); })
+      .then(function () { pc = peer; })
+      .catch(function (err) { try { peer.close(); } catch (e) {} throw err; });
+  }
+
+  function startHls() {
+    if (window.Hls && Hls.isSupported()) {
+      hls = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 3,
+                      manifestLoadingRetryDelay: 1000, manifestLoadingMaxRetry: 6 });
+      hls.loadSource(HLS_URL);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, startPlayback);
+      hls.on(Hls.Events.ERROR, function (_e, data) {
+        if (!data.fatal) return;
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+        else detach();
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = HLS_URL; startPlayback();
+    } else {
+      setOverlay(true, 'Unsupported browser', 'This browser can play neither WebRTC nor HLS.', false);
+    }
+  }
+
+  function detach() {
+    if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+    if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+    video.srcObject = null;
+    video.removeAttribute('src');
+    try { video.load(); } catch (e) {}
+    setMode(null);
+    attaching = false;
+  }
+
+  function attach() {
+    if (mode || attaching) return;
+    attaching = true;
+    function goHls(why) {
+      if (why) console.warn('watchparty: falling back to HLS —', why);
+      setOverlay(true, 'Starting stream', 'Low-latency path unavailable, using HLS…', true);
+      setMode('hls'); startHls(); attaching = false;
+    }
+    if (rtcBroken || !window.RTCPeerConnection) return goHls('WebRTC unavailable');
+    setOverlay(true, 'Connecting', 'Negotiating a low-latency connection…', true);
+    startWhep().then(function () {
+      setMode('webrtc'); attaching = false; startPlayback();
+    }).catch(function (err) {
+      rtcBroken = true; video.srcObject = null; goHls(err && err.message);
+    });
+  }
+
+  function seekLive() {
+    try {
+      if (video.seekable && video.seekable.length) {
+        video.currentTime = video.seekable.end(video.seekable.length - 1);
+      }
+      video.play().catch(function () {});
+    } catch (e) {}
+  }
+  syncBtn.addEventListener('click', seekLive);
+
+  playBtn.addEventListener('click', function () {
+    video.muted = false;
+    video.play().then(function () { if (mode === 'hls') seekLive(); setOverlay(false); })
+      .catch(function () { video.muted = true; unmuteBtn.hidden = false; video.play(); setOverlay(false); });
+  });
+  unmuteBtn.addEventListener('click', function () { video.muted = false; unmuteBtn.hidden = true; });
+  video.addEventListener('volumechange', function () { if (!video.muted) unmuteBtn.hidden = true; });
+  video.addEventListener('playing', function () { setOverlay(false); syncBtn.disabled = (mode !== 'hls'); });
+  video.addEventListener('waiting', function () { setOverlay(true, 'Buffering', 'Waiting for more video…', true); });
+
+  function drift() {
+    if (!video.seekable || !video.seekable.length) return null;
+    return video.seekable.end(video.seekable.length - 1) - video.currentTime;
+  }
+
+  function poll() {
+    var url = 'api/status?id=' + encodeURIComponent(SID) + '&playing=' + (isPlaying() ? '1' : '0');
+    fetch(url, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        renderViewers(s.viewers, s.live);
+        if (s.live) {
+          dot.classList.add('live'); state.textContent = 'live';
+          attach();
+          if (mode === 'hls') {
+            var d = drift();
+            hint.textContent = (d !== null && isFinite(d)) ? d.toFixed(1) + 's behind live' : '';
+          } else hint.textContent = '';
+        } else {
+          dot.classList.remove('live'); state.textContent = 'offline';
+          hint.textContent = ''; syncBtn.disabled = true;
+          if (mode) detach();
+          setOverlay(true, 'Waiting for the stream',
+            'Nothing is being broadcast yet. This page will start playing on its own the moment the stream goes live.', true);
+        }
+      })
+      .catch(function () {
+        dot.classList.remove('live'); state.textContent = 'no connection'; renderViewers(null);
+        setOverlay(true, 'Cannot reach the server', 'Retrying…', true);
+      })
+      .then(function () { setTimeout(poll, POLL_MS); });
+  }
+
+  window.addEventListener('pagehide', function () {
+    try { fetch('api/status?id=' + encodeURIComponent(SID) + '&leave=1',
+                { method: 'GET', keepalive: true, cache: 'no-store' }); } catch (e) {}
+  });
+
+  var hint = document.getElementById('hint');
+  poll();
+
+  /* ================= chat ================= */
+
+  var logEl    = document.getElementById('chat-log');
+  var authBox  = document.getElementById('chat-auth');
+  var formEl   = document.getElementById('chat-form');
+  var inputEl  = document.getElementById('chat-input');
+  var whoEl    = document.getElementById('chat-who');
+  var errEl    = document.getElementById('auth-err');
+  var signout  = document.getElementById('signout');
+  var uEl      = document.getElementById('cu');
+  var pEl      = document.getElementById('cp');
+
+  var TOKEN_KEY = 'watchparty.token', USER_KEY = 'watchparty.user';
+  // Session state is kept in localStorage, so it persists indefinitely.
+  var store = {
+    get token() { try { return localStorage.getItem(TOKEN_KEY); } catch (e) { return null; } },
+    get user()  { try { return localStorage.getItem(USER_KEY); } catch (e) { return null; } },
+    save: function (t, u) { try { localStorage.setItem(TOKEN_KEY, t); localStorage.setItem(USER_KEY, u); } catch (e) {} },
+    clear: function () { try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch (e) {} },
+  };
+
+  var sock = null, backoff = 1000, me = null;
+
+  function nearBottom() { return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 60; }
+  function scrollDown() { logEl.scrollTop = logEl.scrollHeight; }
+
+  function clearEmpty() {
+    var e = logEl.querySelector('.empty');
+    if (e) e.remove();
+  }
+  function showEmpty(text) {
+    if (logEl.children.length) return;
+    var d = document.createElement('div');
+    d.className = 'empty';
+    d.textContent = text;
+    logEl.appendChild(d);
+  }
+
+  // Deterministic per-name colour, purely cosmetic.
+  function hue(name) {
+    var h = 0;
+    for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+    return h;
+  }
+
+  function addMessage(m) {
+    var stick = nearBottom();
+    clearEmpty();
+    var row = document.createElement('div');
+    row.className = 'm';
+    var who = document.createElement('span');
+    who.className = 'who';
+    who.textContent = m.from;
+    who.style.color = 'hsl(' + hue(m.from) + ' 60% 70%)';
+    var tx = document.createElement('span');
+    // textContent, never innerHTML: message text is never parsed as markup.
+    tx.textContent = m.text;
+    row.append(who, tx);
+    logEl.appendChild(row);
+    while (logEl.children.length > 300) logEl.removeChild(logEl.firstChild);
+    if (stick) scrollDown();
+  }
+
+  function addSystem(text) {
+    var stick = nearBottom();
+    clearEmpty();
+    var d = document.createElement('div');
+    d.className = 'sys';
+    d.textContent = text;
+    logEl.appendChild(d);
+    if (stick) scrollDown();
+  }
+
+  function setAuthedUI(user) {
+    me = user;
+    var on = !!user;
+    authBox.hidden = on;
+    formEl.hidden = !on;
+    signout.hidden = !on;
+    whoEl.textContent = on ? user : '';
+    if (on) inputEl.focus();
+  }
+
+  function connect() {
+    var url = new URL('ws', document.baseURI);
+    url.protocol = (location.protocol === 'https:') ? 'wss:' : 'ws:';
+    try { sock = new WebSocket(url.href); } catch (e) { return retry(); }
+
+    sock.onopen = function () {
+      backoff = 1000;
+      var t = store.token;
+      if (t) sock.send(JSON.stringify({ t: 'auth', token: t }));
+    };
+
+    sock.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.t === 'hello') {
+        logEl.textContent = '';
+        (m.history || []).forEach(addMessage);
+        showEmpty('No messages yet.');
+        scrollDown();
+      } else if (m.t === 'auth') {
+        if (m.ok) { setAuthedUI(m.user); store.save(store.token, m.user); errEl.textContent = ''; }
+        else { store.clear(); setAuthedUI(null); if (m.error) errEl.textContent = m.error; }
+      } else if (m.t === 'msg') {
+        addMessage(m);
+      } else if (m.t === 'system') {
+        addSystem(m.text);
+      } else if (m.t === 'presence') {
+        var n = (m.names || []).length;
+        whoEl.textContent = me ? me : '';
+        logEl.dataset.present = n;
+      } else if (m.t === 'error') {
+        addSystem(m.error);
+      }
+    };
+
+    sock.onclose = function () { sock = null; setTimeout(retry, 0); };
+    sock.onerror = function () { try { sock.close(); } catch (e) {} };
+  }
+
+  function retry() {
+    if (sock) return;
+    setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, 15000);
+  }
+
+  function submitAuth(mode) {
+    errEl.textContent = '';
+    var username = uEl.value.trim(), password = pEl.value;
+    if (!username || !password) { errEl.textContent = 'Enter a username and password.'; return; }
+    fetch('api/auth/' + mode, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password }),
+    })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'Server error.' }; }); })
+      .then(function (j) {
+        if (!j.ok) { errEl.textContent = j.error || 'Could not sign in.'; return; }
+        store.save(j.token, j.user);
+        pEl.value = '';
+        setAuthedUI(j.user);
+        if (sock && sock.readyState === 1) sock.send(JSON.stringify({ t: 'auth', token: j.token }));
+      })
+      .catch(function () { errEl.textContent = 'Could not reach the server.'; });
+  }
+
+  document.getElementById('btn-login').addEventListener('click', function () { submitAuth('login'); });
+  document.getElementById('btn-register').addEventListener('click', function () { submitAuth('register'); });
+  pEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') submitAuth('login'); });
+
+  signout.addEventListener('click', function () {
+    store.clear();
+    setAuthedUI(null);
+    if (sock) { try { sock.close(); } catch (e) {} }   // reconnect anonymously
+  });
+
+  formEl.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var text = inputEl.value.trim();
+    if (!text || !sock || sock.readyState !== 1) return;
+    sock.send(JSON.stringify({ t: 'msg', text: text }));
+    inputEl.value = '';
+  });
+
+  setAuthedUI(store.user && store.token ? store.user : null);
+  connect();
+})();
+</script>
+</body>
+</html>

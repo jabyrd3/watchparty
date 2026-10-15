@@ -1,0 +1,13 @@
+# Live configs derived from the examples -- these hold real credentials.
+mediamtx.yml
+docker-compose.yml
+nginx/watchparty.locations.conf
+.env
+
+# Runtime state
+data/
+*.db
+*.db-wal
+*.db-shm
+session.key
+node_modules/
